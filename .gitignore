@@ -9,3 +9,4 @@ agent_app/__pycache__/server.cpython-313.pyc
 logs/agent.log
 /agent_app/__pycache__
 *.log
+logs/agent.log
