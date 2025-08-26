@@ -6,3 +6,6 @@
 *.log
 agent_app/__pycache__/config.cpython-313.pyc
 agent_app/__pycache__/server.cpython-313.pyc
+logs/agent.log
+/agent_app/__pycache__
+*.log
