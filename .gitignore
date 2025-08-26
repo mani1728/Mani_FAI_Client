@@ -4,3 +4,4 @@
 .idea/modules.xml
 .idea/vcs.xml
 *.log
+agent_app/__pycache__/config.cpython-313.pyc
