@@ -1,0 +1,2 @@
+2025-08-27 00:56:36,667 - AgentApp - INFO - Successfully connected to MetaTrader 5 terminal.
+2025-08-27 00:56:36,801 - AgentApp - ERROR - Error handling message: object of type 'NoneType' has no len()
