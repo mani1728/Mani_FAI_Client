@@ -7,6 +7,6 @@ sv_ttk==2.6.1
 pytz==2025.2
 schedule==1.2.2
 websockets==15.0.1
-logging==0.4.9.6
+#logging==0.4.9.6
 asyncio==4.0.0
-functools==0.5
+#functools==0.5
