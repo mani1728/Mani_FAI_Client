@@ -1,0 +1,12 @@
+C:\Users\Administrator\Desktop\project_files\windows_agent_project\client\
+├── agent_app\
+│   ├── main.py
+│   ├── gui.py
+│   ├── server.py
+│   ├── logger.py
+│   ├── config.py
+│   ├── mt5_manager.py
+│   └── requirements.txt
+│
+└── logs\
+   └── agent.log
