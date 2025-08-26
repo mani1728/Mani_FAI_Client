@@ -1,93 +1,108 @@
-# C:\...\windows_agent_project\client\agent_app\mt5_manager.py
-
+# ==================================================================
+# File: agent_app/mt5_manager.py
+# Description: این فایل مسئول تمام تعاملات با MetaTrader 5 است.
+# ==================================================================
 import MetaTrader5 as mt5
-from logger import setup_logger
+import logging
 
 
 class MT5Manager:
-    def __init__(self, gui_callback):
-        self.logger = setup_logger()
-        self.gui_callback = gui_callback
-        self.connected = False
+    def __init__(self):
+        self.logger = logging.getLogger("AgentApp")
+        if not mt5.initialize():
+            self.logger.error(f"initialize() failed, error code = {mt5.last_error()}")
+            return
+        self.logger.info("MetaTrader 5 initialized successfully.")
 
     def connect(self):
-        """به پلتفرم MetaTrader 5 متصل می‌شود."""
-        try:
+        if not mt5.terminal_info():
             if not mt5.initialize():
-                error_msg = f"Error: Failed to initialize MT5: {mt5.last_error()}"
-                self.logger.error(error_msg)
-                self.gui_callback(error_msg)
+                self.logger.error(f"initialize() failed, error code = {mt5.last_error()}")
                 return False
-            self.connected = True
-            self.logger.info("Successfully connected to MetaTrader 5 terminal.")
-            self.gui_callback("MT5 Status: Connected")
-            return True
-        except Exception as e:
-            error_msg = f"Error: MT5 connection error: {e}"
-            self.logger.error(error_msg)
-            self.gui_callback(error_msg)
-            return False
-
-    def disconnect(self):
-        """ارتباط با MetaTrader 5 را قطع می‌کند."""
-        if self.connected:
-            mt5.shutdown()
-            self.connected = False
-            self.logger.info("Disconnected from MetaTrader 5.")
-            self.gui_callback("MT5 Status: Disconnected")
-
-    def get_status(self):
-        """وضعیت اتصال به MT5 را برمی‌گرداند."""
-        return "Connected" if self.connected else "Not connected"
+        return True
 
     def get_account_info(self):
-        """اطلاعات حساب کاربری لاگین شده را دریافت می‌کند."""
-        if not self.connected:
+        if not self.connect():
             return None
-        try:
-            account_info = mt5.account_info()
-            if account_info:
-                return account_info._asdict()
-            return None
-        except Exception as e:
-            self.logger.error(f"Error retrieving account info: {e}")
-            return None
+        return mt5.account_info()._asdict()
 
-    def sync_all_symbols_in_batches(self, progress_callback, batch_size=50):
-        """تمام نمادها را به صورت دسته‌ای پردازش کرده و دیتا را yield می‌کند."""
-        if not self.connected:
+    def get_all_symbols(self):
+        """
+        این تابع تمام نمادهای موجود در Market Watch را گرفته
+        و اطلاعات کامل آن‌ها را به صورت لیستی از دیکشنری‌ها برمی‌گرداند.
+        """
+        if not self.connect():
+            return []
+
+        symbols = mt5.symbols_get()
+        if not symbols:
+            self.logger.warning("No symbols found in Market Watch.")
+            return []
+
+        symbols_data = []
+        for symbol in symbols:
+            # ._asdict() هر آبجکت نماد را به یک دیکشنری پایتون تبدیل می‌کند
+            symbols_data.append(symbol._asdict())
+
+        self.logger.info(f"Retrieved {len(symbols_data)} symbols from MT5.")
+        return symbols_data
+
+    def disconnect(self):
+        mt5.shutdown()
+        self.logger.info("Disconnected from MetaTrader 5.")
+
+
+# ==================================================================
+# File: agent_app/gui.py (بخش‌های مرتبط)
+# Description: این بخش از کد GUI مسئول مدیریت رویداد کلیک دکمه Sync Symbols است.
+# شما باید این منطق را در کلاس GUI خود ادغام کنید.
+# ==================================================================
+# فرض می‌کنیم شما یک کلاس به نام App یا GUI دارید
+# و متدهای websocket_client و mt5_manager به عنوان property در دسترس هستند.
+
+class YourApp:
+    # ... (بقیه کدهای GUI شما مثل __init__, setup_ui, etc.)
+
+    def on_sync_symbols_click(self):
+        """
+        این تابع زمانی اجرا می‌شود که کاربر روی دکمه Sync Symbols کلیک می‌کند.
+        این تابع مسئول جمع‌آوری تمام نمادها و ارسال آن‌ها در یک درخواست واحد است.
+        """
+        self.log_message("Starting symbol synchronization...")
+
+        # 1. دریافت اطلاعات کامل تمام نمادها از متاتریدر
+        all_symbols = self.mt5_manager.get_all_symbols()
+
+        if not all_symbols:
+            self.log_message("No symbols to sync.", "warning")
             return
+
+        # 2. دریافت اطلاعات حساب برای به دست آوردن login_id
+        account_info = self.mt5_manager.get_account_info()
+        if not account_info:
+            self.log_message("Could not get account info. Cannot sync.", "error")
+            return
+
+        login_id = account_info.get('login')
+
+        # 3. ساختاردهی داده‌ها در فرمت صحیح مورد انتظار سرور
+        #    یک دیکشنری واحد که شامل login و لیست symbols است.
+        payload = {
+            "type": "symbols_info_sync",
+            "login": login_id,
+            "symbols": all_symbols  # <--- کل لیست نمادها اینجا قرار می‌گیرد
+        }
+
+        # 4. ارسال بسته کامل به پراکسی سرور
         try:
-            symbols = mt5.symbols_get()
-            if not symbols:
-                self.logger.warning("sync_all_symbols_in_batches: No symbols found to sync.")
-                return
-
-            total_symbols = len(symbols)
-            processed_count = 0
-
-            for i in range(0, total_symbols, batch_size):
-                batch = symbols[i:i + batch_size]
-                batch_names = [s.name for s in batch]
-
-                # 🎯 اصلاح کلیدی: مقداردهی اولیه صحیح batch_data به عنوان لیست خالی
-                batch_data =[]
-
-                for name in batch_names:
-                    mt5.symbol_select(name, True)
-
-                for name in batch_names:
-                    info = mt5.symbol_info(name)
-                    if info:
-                        batch_data.append(info._asdict())
-                    processed_count += 1
-
-                for name in batch_names:
-                    mt5.symbol_select(name, False)
-
-                progress_callback(processed_count, total_symbols)
-                yield batch_data
-
+            # فرض می‌کنیم شما یک متد برای ارسال پیام از طریق وب‌ساکت دارید
+            self.websocket_client.send_message(payload)
+            self.log_message(f"Successfully sent {len(all_symbols)} symbols to the server for synchronization.")
         except Exception as e:
-            # 🎯 بهبود لاگ خطا برای ارائه جزئیات بیشتر
-            self.logger.error(f"Error during batch symbol sync: {e}", exc_info=True)
+            self.log_message(f"Failed to send symbols to server: {e}", "error")
+
+    def log_message(self, message, level="info"):
+        # یک تابع کمکی برای نمایش پیام در GUI
+        print(f"[{level.upper()}] {message}")
+        # شما باید این را به ویجت لاگ خود متصل کنید
+        # self.log_text_widget.append(f"[{level.upper()}] {message}")
