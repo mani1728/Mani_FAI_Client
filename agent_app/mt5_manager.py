@@ -1,7 +1,7 @@
 # ==================================================================
 # File: agent_app/mt5_manager.py
-# Description: این فایل مسئول تمام تعاملات با MetaTrader 5 است.
-# این کد کامل و نهایی است.
+# Description: کد کامل و اصلاح شده.
+# تغییر اصلی: تابع __init__ حالا یک ورودی به نام gui_callback می‌پذیرد.
 # ==================================================================
 import MetaTrader5 as mt5
 import logging
@@ -9,26 +9,51 @@ import logging
 
 class MT5Manager:
     """
-    کلاسی برای مدیریت تمام عملیات مربوط به MetaTrader 5،
-    شامل اتصال، دریافت اطلاعات حساب و واکشی اطلاعات نمادها.
+    کلاسی برای مدیریت تمام عملیات مربوط به MetaTrader 5.
     """
 
-    def __init__(self):
+    def __init__(self, gui_callback=None):
+        """
+        سازنده کلاس که حالا یک تابع callback برای ارسال پیام به GUI دریافت می‌کند.
+        """
         self.logger = logging.getLogger("AgentApp")
-        if not mt5.initialize():
-            self.logger.error(f"initialize() failed, error code = {mt5.last_error()}")
-            # در صورت عدم موفقیت در اتصال اولیه، بهتر است یک استثنا ایجاد شود
-            raise ConnectionError("Failed to initialize MetaTrader 5")
-        self.logger.info("MetaTrader 5 initialized successfully.")
+        self.gui_callback = gui_callback
+
+        try:
+            if not mt5.initialize():
+                self.logger.error(f"initialize() failed, error code = {mt5.last_error()}")
+                # اگر اتصال اولیه ناموفق بود، یک استثنا ایجاد می‌کنیم
+                raise ConnectionError("Failed to initialize MetaTrader 5")
+            self.logger.info("MetaTrader 5 initialized successfully.")
+        except Exception as e:
+            self.log_message(f"Initialization failed: {e}", "critical")
+            raise
+
+    def log_message(self, message, level="info"):
+        """
+        یک تابع کمکی برای لاگ کردن و ارسال پیام به صف GUI.
+        """
+        if level == "info":
+            self.logger.info(message)
+        elif level == "warning":
+            self.logger.warning(message)
+        elif level == "error":
+            self.logger.error(message)
+        elif level == "critical":
+            self.logger.critical(message)
+
+        if self.gui_callback:
+            # ارسال پیام به صف GUI برای نمایش در رابط کاربری
+            self.gui_callback({"type": "log", "level": level, "message": message})
 
     def connect(self):
         """
         اطمینان حاصل می‌کند که یک اتصال فعال با ترمینال متاتریدر وجود دارد.
         """
         if not mt5.terminal_info():
-            self.logger.warning("No active terminal connection, trying to re-initialize...")
+            self.log_message("No active terminal connection, trying to re-initialize...", "warning")
             if not mt5.initialize():
-                self.logger.error(f"re-initialize() failed, error code = {mt5.last_error()}")
+                self.log_message(f"re-initialize() failed, error code = {mt5.last_error()}", "error")
                 return False
         return True
 
@@ -41,28 +66,23 @@ class MT5Manager:
         account_info = mt5.account_info()
         if account_info:
             return account_info._asdict()
-        self.logger.error("Could not retrieve account info.")
+        self.log_message("Could not retrieve account info.", "error")
         return None
 
     def get_all_symbols(self):
         """
-        این تابع تمام نمادهای موجود در Market Watch را گرفته
-        و اطلاعات کامل آن‌ها را به صورت لیستی از دیکشنری‌ها برمی‌گرداند.
+        تمام نمادهای موجود در Market Watch را به صورت لیستی از دیکشنری‌ها برمی‌گرداند.
         """
         if not self.connect():
             return []
 
         symbols = mt5.symbols_get()
         if not symbols:
-            self.logger.warning("No symbols found in Market Watch.")
+            self.log_message("No symbols found in Market Watch.", "warning")
             return []
 
-        symbols_data = []
-        for symbol in symbols:
-            # ._asdict() هر آبجکت نماد را به یک دیکشنری پایتون تبدیل می‌کند
-            symbols_data.append(symbol._asdict())
-
-        self.logger.info(f"Retrieved {len(symbols_data)} symbols from MT5.")
+        symbols_data = [s._asdict() for s in symbols]
+        self.log_message(f"Retrieved {len(symbols_data)} symbols from MT5.", "info")
         return symbols_data
 
     def disconnect(self):
@@ -70,4 +90,4 @@ class MT5Manager:
         اتصال با ترمینال متاتریدر را قطع می‌کند.
         """
         mt5.shutdown()
-        self.logger.info("Disconnected from MetaTrader 5.")
+        self.log_message("Disconnected from MetaTrader 5.", "info")
