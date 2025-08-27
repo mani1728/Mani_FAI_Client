@@ -1,4 +1,4 @@
-# ==================================================================
+# = =================================================================
 # File: Mani_FAI_Client/agent_app/gui.py
 # Description: نسخه کامل و نهایی رابط کاربری با تمام قابلیت‌ها.
 # ==================================================================
@@ -8,6 +8,7 @@ import sv_ttk
 import threading
 import queue
 import json
+import time
 from server import AgentClient
 from mt5_manager import MT5Manager
 
@@ -181,10 +182,11 @@ class AgentGUI:
             percentage = (current / total) * 100
             self.progress_bar["value"] = percentage
             self.progress_label.config(
-                text=f"Syncing '{msg.get('symbol', 'N/A')}': {current}/{total} ({percentage:.2f}%)")
+                text=f"Syncing '{msg.get('symbol', 'Symbol List')}': {current}/{total} ({percentage:.2f}%)")
         if current >= total:
-            self.progress_label.config(text=f"Synchronization complete for '{msg.get('symbol', 'N/A')}'!")
-            self.symbol_combobox.config(state="normal")  # Re-enable combobox after sync
+            self.progress_label.config(text=f"Synchronization complete for '{msg.get('symbol', 'Symbol List')}'!")
+            self.sync_button.config(state="normal")
+            self.symbol_combobox.config(state="normal")
 
     def handle_db_symbols(self, symbols):
         if symbols:
@@ -225,39 +227,42 @@ class AgentGUI:
         self.symbol_combobox.set_master_list([])
 
     def start_sync_thread(self):
-        self.progress_label.config(text="Manual sync requested...")
+        self.progress_label.config(text="Manual sync requested for symbol list...")
         self.progress_bar["value"] = 0
         self.sync_button.config(state="disabled")
         sync_thread = threading.Thread(target=self.on_sync_symbols_click, daemon=True)
         sync_thread.start()
 
     def on_sync_symbols_click(self):
+        """
+        منطق جدید برای ارسال دسته‌ای لیست کلی نمادها.
+        """
         self.handle_status_message("Starting symbol list synchronization...")
-        all_symbols = self.mt5.get_all_symbols()
-        if not all_symbols:
-            self.handle_status_message("No symbols found in MT5 to sync.", "warning")
-            self.sync_button.config(state="normal")
-            return
-
         account_info = self.mt5.get_account_info()
         if not account_info:
             self.handle_status_message("Could not get account info. Cannot sync.", "error")
             self.sync_button.config(state="normal")
             return
-
         self.login_number = account_info.get('login')
-        payload = {
-            "type": "symbols_info_sync",
-            "login": self.login_number,
-            "symbols": all_symbols
-        }
-        try:
+
+        def progress_callback(current, total):
+            self.gui_queue.put({"type": "progress_update", "current": current, "total": total})
+
+        symbol_generator = self.mt5.get_all_symbols_in_batches(progress_callback)
+        for batch_data in symbol_generator:
+            if batch_data is None:
+                self.handle_status_message("Failed to fetch symbol list from MT5.", "error")
+                break
+            if not batch_data:
+                continue
+
+            payload = {"type": "symbols_info_sync", "login": self.login_number, "symbols": batch_data}
             self.client.send_message(payload)
-            self.handle_status_message(f"Sent {len(all_symbols)} symbols to the server.")
-        except Exception as e:
-            self.handle_status_message(f"Failed to send symbols to server: {e}", "error")
-        finally:
-            self.sync_button.config(state="normal")
+            time.sleep(0.1)  # Pause briefly to avoid overwhelming the server
+
+        self.handle_status_message("Finished syncing symbol list. You can now search.", "info")
+        # After sync, re-fetch the list from DB to populate combobox
+        self.start_symbol_fetching()
 
     def start_symbol_fetching(self):
         self.symbol_combobox.set("Loading symbol list from database...")
