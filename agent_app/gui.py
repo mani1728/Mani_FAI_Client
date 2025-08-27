@@ -1,11 +1,111 @@
+# ==================================================================
+# File: agent_app/mt5_manager.py
+# Description: کد کامل و اصلاح شده.
+# تغییر اصلی: تابع __init__ حالا یک ورودی به نام gui_callback می‌پذیرد.
+# ==================================================================
+import MetaTrader5 as mt5
+import logging
+
+
+class MT5Manager:
+    """
+    کلاسی برای مدیریت تمام عملیات مربوط به MetaTrader 5.
+    """
+
+    def __init__(self, gui_callback=None):
+        """
+        سازنده کلاس که حالا یک تابع callback برای ارسال پیام به GUI دریافت می‌کند.
+        """
+        self.logger = logging.getLogger("AgentApp")
+        self.gui_callback = gui_callback
+
+        try:
+            if not mt5.initialize():
+                self.logger.error(f"initialize() failed, error code = {mt5.last_error()}")
+                # اگر اتصال اولیه ناموفق بود، یک استثنا ایجاد می‌کنیم
+                raise ConnectionError("Failed to initialize MetaTrader 5")
+            self.logger.info("MetaTrader 5 initialized successfully.")
+        except Exception as e:
+            self.log_message(f"Initialization failed: {e}", "critical")
+            raise
+
+    def log_message(self, message, level="info"):
+        """
+        یک تابع کمکی برای لاگ کردن و ارسال پیام به صف GUI.
+        """
+        if level == "info":
+            self.logger.info(message)
+        elif level == "warning":
+            self.logger.warning(message)
+        elif level == "error":
+            self.logger.error(message)
+        elif level == "critical":
+            self.logger.critical(message)
+
+        if self.gui_callback:
+            # ارسال پیام به صف GUI برای نمایش در رابط کاربری
+            self.gui_callback({"type": "log", "level": level, "message": message})
+
+    def connect(self):
+        """
+        اطمینان حاصل می‌کند که یک اتصال فعال با ترمینال متاتریدر وجود دارد.
+        """
+        if not mt5.terminal_info():
+            self.log_message("No active terminal connection, trying to re-initialize...", "warning")
+            if not mt5.initialize():
+                self.log_message(f"re-initialize() failed, error code = {mt5.last_error()}", "error")
+                return False
+        return True
+
+    def get_account_info(self):
+        """
+        اطلاعات حساب جاری را به صورت یک دیکشنری برمی‌گرداند.
+        """
+        if not self.connect():
+            return None
+        account_info = mt5.account_info()
+        if account_info:
+            return account_info._asdict()
+        self.log_message("Could not retrieve account info.", "error")
+        return None
+
+    def get_all_symbols(self):
+        """
+        تمام نمادهای موجود در Market Watch را به صورت لیستی از دیکشنری‌ها برمی‌گرداند.
+        """
+        if not self.connect():
+            return []
+
+        symbols = mt5.symbols_get()
+        if not symbols:
+            self.log_message("No symbols found in Market Watch.", "warning")
+            return []
+
+        symbols_data = [s._asdict() for s in symbols]
+        self.log_message(f"Retrieved {len(symbols_data)} symbols from MT5.", "info")
+        return symbols_data
+
+    def disconnect(self):
+        """
+        اتصال با ترمینال متاتریدر را قطع می‌کند.
+        """
+        mt5.shutdown()
+        self.log_message("Disconnected from MetaTrader 5.", "info")
+
+
+# ==================================================================
+# File: agent_app/gui.py
+# Description: کد کامل و اصلاح شده با افزودن لاگ‌های دقیق برای دیباگ کردن.
+# ==================================================================
 import tkinter as tk
-from tkinter import ttk, font
+from tkinter import ttk, font, scrolledtext, messagebox, simpledialog
 import sv_ttk
 import threading
 import queue
 import json
 from server import AgentClient
 from mt5_manager import MT5Manager
+import logging
 
 
 # ==============================================================================
@@ -82,6 +182,9 @@ class AgentGUI:
 
         self.default_font = font.nametofont("TkDefaultFont")
         self.default_font.configure(family="Segoe UI", size=10)
+
+        # دریافت لاگر اصلی برنامه
+        self.logger = logging.getLogger("AgentApp")
 
         self.gui_queue = queue.Queue()
         self.mt5 = MT5Manager(self.gui_queue.put)
@@ -232,21 +335,25 @@ class AgentGUI:
         این تابع زمانی اجرا می‌شود که کاربر روی دکمه Sync Symbols کلیک می‌کند.
         این تابع مسئول جمع‌آوری تمام نمادها و ارسال آن‌ها در یک درخواست واحد است.
         """
+        self.logger.info("Sync symbols button clicked. Starting process...")
         self.handle_status_message("Starting symbol synchronization...")
 
         # 1. دریافت اطلاعات کامل تمام نمادها از متاتریدر
         all_symbols = self.mt5.get_all_symbols()
         if not all_symbols:
+            self.logger.warning("No symbols found in MT5 to sync. Aborting.")
             self.handle_status_message("No symbols found in MT5 to sync.", "warning")
             return
 
         # 2. دریافت اطلاعات حساب برای به دست آوردن login_id
         account_info = self.mt5.get_account_info()
         if not account_info:
+            self.logger.error("Could not get account info. Sync process aborted.")
             self.handle_status_message("Could not get account info. Cannot sync.", "error")
             return
 
         login_id = account_info.get('login')
+        self.logger.info(f"Account info retrieved successfully for login: {login_id}")
 
         # 3. ساختاردهی داده‌ها در فرمت صحیح مورد انتظار سرور
         payload = {
@@ -254,14 +361,19 @@ class AgentGUI:
             "login": login_id,
             "symbols": all_symbols
         }
+        self.logger.info(f"Payload created for {len(all_symbols)} symbols.")
 
         # 4. ارسال بسته کامل به پراکسی سرور
         try:
             message_str = json.dumps(payload)
+            self.logger.info("Attempting to send symbol sync payload to server...")
             self.client.send_message(message_str)
+            self.logger.info(f"Successfully sent payload for {len(all_symbols)} symbols.")  # <-- لاگ کلیدی
             self.handle_status_message(
                 f"Successfully sent {len(all_symbols)} symbols to the server for synchronization.")
         except Exception as e:
+            # لاگ کردن خطا با جزئیات کامل
+            self.logger.error(f"An exception occurred while sending symbols: {e}", exc_info=True)
             self.handle_status_message(f"Failed to send symbols to server: {e}", "error")
 
     def start_symbol_fetching(self):
@@ -271,6 +383,8 @@ class AgentGUI:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = AgentGUI(root)
-    root.mainloop()
+    # این بخش باید در فایل main.py شما باشد
+    # root = tk.Tk()
+    # app = AgentGUI(root)
+    # root.mainloop()
+    pass
