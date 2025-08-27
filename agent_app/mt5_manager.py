@@ -1,6 +1,6 @@
 # ==================================================================
 # File: Mani_FAI_Client/agent_app/mt5_manager.py
-# Description: کد کامل و نهایی مدیر متاتریدر با تمام قابلیت‌ها.
+# Description: نسخه کامل و نهایی مدیر متاتریدر با تمام قابلیت‌ها.
 # ==================================================================
 import MetaTrader5 as mt5
 import logging
@@ -75,36 +75,48 @@ class MT5Manager:
         self.log_message(f"Retrieved {len(symbols_data)} symbols from MT5.", "info")
         return symbols_data
 
-    def get_rates_for_symbol(self, symbol_name, timeframe=mt5.TIMEFRAME_M1, count=100000):
+    def get_rates_in_batches(self, symbol_name, progress_callback, timeframe=mt5.TIMEFRAME_M1, total_count=100000,
+                             batch_size=5000):
         """
-        داده‌های کندل (rates) را برای یک نماد خاص واکشی کرده، پردازش می‌کند و به صورت لیستی از دیکشنری‌ها برمی‌گرداند.
+        داده‌های کندل را به صورت دسته‌ای (batch) واکشی، پردازش و yield می‌کند.
+        این کار از مصرف بالای حافظه جلوگیری کرده و امکان ارسال داده‌های حجیم را فراهم می‌کند.
         """
         if not self.connect():
-            return None
+            yield None  # None نشان‌دهنده خطا است
+            return
 
         try:
-            rates = mt5.copy_rates_from_pos(symbol_name, timeframe, 0, count)
+            rates = mt5.copy_rates_from_pos(symbol_name, timeframe, 0, total_count)
             if rates is None or len(rates) == 0:
                 self.log_message(f"Could not retrieve rates for {symbol_name}, error: {mt5.last_error()}", "warning")
-                return []
+                yield []  # لیست خالی یعنی داده‌ای پیدا نشد
+                return
 
             rates_frame = pd.DataFrame(rates)
             rates_frame['time_real'] = pd.to_datetime(rates_frame['time'], unit='s').dt.strftime('%Y-%m-%d %H:%M:%S')
-
             for col in ['open', 'high', 'low', 'close']:
                 rates_frame[col] = rates_frame[col].astype(float)
-
             for col in ['tick_volume', 'spread', 'real_volume']:
                 rates_frame[col] = rates_frame[col].astype(int)
 
-            rates_data = rates_frame.to_dict('records')
+            total_rates = len(rates_frame)
+            self.log_message(f"Retrieved {total_rates} total rates for {symbol_name}. Starting batch processing...",
+                             "info")
 
-            self.log_message(f"Retrieved and processed {len(rates_data)} rates for symbol {symbol_name}", "info")
-            return rates_data
+            # حلقه برای تقسیم دیتافریم به بچ‌های کوچک‌تر
+            for i in range(0, total_rates, batch_size):
+                batch_df = rates_frame.iloc[i:i + batch_size]
+                batch_data = batch_df.to_dict('records')
+
+                # گزارش پیشرفت به GUI
+                progress_callback(min(i + batch_size, total_rates), total_rates)
+
+                # yield کردن هر بچ به تابعی که آن را فراخوانی کرده
+                yield batch_data
 
         except Exception as e:
             self.log_message(f"An exception occurred while fetching rates for {symbol_name}: {e}", "error")
-            return None
+            yield None
 
     def disconnect(self):
         """
