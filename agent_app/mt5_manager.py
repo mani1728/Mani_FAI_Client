@@ -61,35 +61,43 @@ class MT5Manager:
         self.log_message("Could not retrieve account info.", "error")
         return None
 
-    def get_all_symbols(self):
+    def get_all_symbols_in_batches(self, progress_callback, batch_size=500):
         """
-        تمام نمادهای موجود در Market Watch را به صورت لیستی از دیکشنری‌ها برمی‌گرداند.
+        تمام نمادها را به صورت دسته‌ای (batch) واکشی و yield می‌کند تا از ارسال پیام‌های حجیم جلوگیری شود.
         """
         if not self.connect():
-            return []
+            yield None  # None نشان‌دهنده خطا است
+            return
+
         symbols = mt5.symbols_get()
         if not symbols:
             self.log_message("No symbols found in Market Watch.", "warning")
-            return []
+            yield []  # لیست خالی یعنی داده‌ای پیدا نشد
+            return
+
         symbols_data = [s._asdict() for s in symbols]
-        self.log_message(f"Retrieved {len(symbols_data)} symbols from MT5.", "info")
-        return symbols_data
+        total_symbols = len(symbols_data)
+        self.log_message(f"Retrieved {total_symbols} total symbols. Starting batch processing...", "info")
+
+        for i in range(0, total_symbols, batch_size):
+            batch = symbols_data[i:i + batch_size]
+            progress_callback(min(i + batch_size, total_symbols), total_symbols)
+            yield batch
 
     def get_rates_in_batches(self, symbol_name, progress_callback, timeframe=mt5.TIMEFRAME_M1, total_count=100000,
                              batch_size=5000):
         """
         داده‌های کندل را به صورت دسته‌ای (batch) واکشی، پردازش و yield می‌کند.
-        این کار از مصرف بالای حافظه جلوگیری کرده و امکان ارسال داده‌های حجیم را فراهم می‌کند.
         """
         if not self.connect():
-            yield None  # None نشان‌دهنده خطا است
+            yield None
             return
 
         try:
             rates = mt5.copy_rates_from_pos(symbol_name, timeframe, 0, total_count)
             if rates is None or len(rates) == 0:
                 self.log_message(f"Could not retrieve rates for {symbol_name}, error: {mt5.last_error()}", "warning")
-                yield []  # لیست خالی یعنی داده‌ای پیدا نشد
+                yield []
                 return
 
             rates_frame = pd.DataFrame(rates)
@@ -103,15 +111,10 @@ class MT5Manager:
             self.log_message(f"Retrieved {total_rates} total rates for {symbol_name}. Starting batch processing...",
                              "info")
 
-            # حلقه برای تقسیم دیتافریم به بچ‌های کوچک‌تر
             for i in range(0, total_rates, batch_size):
                 batch_df = rates_frame.iloc[i:i + batch_size]
                 batch_data = batch_df.to_dict('records')
-
-                # گزارش پیشرفت به GUI
                 progress_callback(min(i + batch_size, total_rates), total_rates)
-
-                # yield کردن هر بچ به تابعی که آن را فراخوانی کرده
                 yield batch_data
 
         except Exception as e:
