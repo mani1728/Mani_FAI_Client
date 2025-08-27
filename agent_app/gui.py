@@ -1,16 +1,15 @@
-# C:\...\windows_agent_project\client\agent_app\gui.py
-
 import tkinter as tk
 from tkinter import ttk, font
 import sv_ttk
 import threading
 import queue
+import json
 from server import AgentClient
 from mt5_manager import MT5Manager
 
 
 # ==============================================================================
-# بخش ۱: کامپوننت سفارشی SearchableCombobox (نسخه اصلاح‌شده و پایدار)
+# بخش ۱: کامپوننت سفارشی SearchableCombobox
 # ==============================================================================
 class SearchableCombobox(ttk.Combobox):
     """
@@ -19,24 +18,21 @@ class SearchableCombobox(ttk.Combobox):
 
     def __init__(self, master=None, **kwargs):
         super().__init__(master, **kwargs)
-
-        self._master_list = []  # همیشه به عنوان یک لیست خالی مقداردهی اولیه می‌شود
+        self._master_list = []
         self._string_var = self['textvariable']
         if not self._string_var:
             self._string_var = tk.StringVar()
             self['textvariable'] = self._string_var
-
         self._string_var.trace_add('write', self._on_text_change)
         self.bind('<<ComboboxSelected>>', self._on_selection)
-
         self._search_job = None
 
     def set_master_list(self, data_list):
         """
         لیست اصلی داده‌ها را برای جستجو تنظیم می‌کند.
-        🎯 اصلاح: ورودی None را به لیست خالی تبدیل می‌کند تا از خطا جلوگیری شود.
         """
-        self._master_list = sorted(data_list) if data_list else self['values'] == self._master_list
+        self._master_list = sorted(data_list) if data_list else []
+        self['values'] = self._master_list
 
     def _on_text_change(self, *args):
         """
@@ -44,19 +40,15 @@ class SearchableCombobox(ttk.Combobox):
         """
         if self._search_job:
             self.after_cancel(self._search_job)
-        # 🎯 اصلاح: نام متغیر به _search_job تغییر یافت.
         self._search_job = self.after(200, self._perform_search)
 
     def _perform_search(self):
         """
         منطق اصلی فیلتر کردن و به‌روزرسانی لیست را اجرا می‌کند.
         """
-        # 🎯 اصلاح: بررسی می‌شود که _master_list حتما یک لیست باشد.
         if not isinstance(self._master_list, (list, tuple)):
             return
-
         search_term = self._string_var.get().lower()
-
         if not search_term:
             filtered_list = self._master_list
         else:
@@ -64,13 +56,8 @@ class SearchableCombobox(ttk.Combobox):
                 item for item in self._master_list
                 if search_term in item.lower()
             ]
-
         self['values'] = filtered_list
-
         if filtered_list:
-            # این بخش برای باز کردن خودکار لیست است، می‌توان آن را غیرفعال کرد
-            # self.event_generate('<Button-1>')
-            # self.event_generate('<Key-Down>')
             pass
 
     def _on_selection(self, event):
@@ -83,7 +70,7 @@ class SearchableCombobox(ttk.Combobox):
 
 
 # ==============================================================================
-# بخش ۲: کلاس اصلی برنامه GUI (با اصلاحات جزئی)
+# بخش ۲: کلاس اصلی برنامه GUI
 # ==============================================================================
 class AgentGUI:
     def __init__(self, root):
@@ -133,7 +120,8 @@ class AgentGUI:
         self.start_button.grid(row=0, column=0, padx=5, sticky="ew")
         self.stop_button = ttk.Button(button_container, text="Disconnect", command=self.stop_client, state="disabled")
         self.stop_button.grid(row=0, column=1, padx=5, sticky="ew")
-        self.sync_button = ttk.Button(button_container, text="Sync Symbols", command=self.manual_sync, state="disabled")
+        self.sync_button = ttk.Button(button_container, text="Sync Symbols", command=self.start_sync_thread,
+                                      state="disabled")
         self.sync_button.grid(row=0, column=2, padx=5, sticky="ew")
 
         # --- بخش جستجوی نماد ---
@@ -173,7 +161,7 @@ class AgentGUI:
                         self.root.title(f"Agent Control Panel v3.1 - Account: {self.login_number}")
                         self.start_symbol_fetching()
                     elif msg_type == "db_symbols_list":
-                        self.handle_db_symbols(msg.get("data", ))
+                        self.handle_db_symbols(msg.get("data", []))
                 else:
                     self.handle_status_message(str(msg))
         finally:
@@ -197,13 +185,17 @@ class AgentGUI:
         else:
             self.symbol_combobox.set("No symbols found or error loading.")
 
-    def handle_status_message(self, msg):
+    def handle_status_message(self, msg, level="info"):
+        """
+        نمایش پیام‌ها در رابط کاربری با سطح اهمیت (info, warning, error).
+        """
+        log_entry = f"[{level.upper()}] {msg}"
         if "Proxy Status:" in msg:
             self.proxy_status_label.config(text=msg)
         elif "MT5 Status:" in msg:
             self.mt5_status_label.config(text=msg)
         else:
-            self.progress_label.config(text=msg)
+            self.progress_label.config(text=log_entry)
 
     def set_proxy_address(self):
         self.client.set_server_address(self.ip_entry.get(), self.port_entry.get())
@@ -223,16 +215,62 @@ class AgentGUI:
         self.sync_button.config(state="disabled")
         self.symbol_combobox.set("Connect to proxy to load symbols...")
         self.symbol_combobox.state(['disabled'])
-        # 🎯 اصلاح: ارسال یک لیست خالی برای پاک کردن امن ویجت
-        self.symbol_combobox.set_master_list()
+        self.symbol_combobox.set_master_list([])
 
-    def manual_sync(self):
+    def start_sync_thread(self):
+        """
+        برای جلوگیری از فریز شدن رابط کاربری، عملیات همگام‌سازی را در یک ترد جدید اجرا می‌کند.
+        """
         self.progress_label.config(text="Manual sync requested...")
         self.progress_bar["value"] = 0
         self.sync_button.config(state="disabled")
-        self.client.trigger_manual_sync()
+        sync_thread = threading.Thread(target=self.on_sync_symbols_click, daemon=True)
+        sync_thread.start()
+
+    def on_sync_symbols_click(self):
+        """
+        این تابع زمانی اجرا می‌شود که کاربر روی دکمه Sync Symbols کلیک می‌کند.
+        این تابع مسئول جمع‌آوری تمام نمادها و ارسال آن‌ها در یک درخواست واحد است.
+        """
+        self.handle_status_message("Starting symbol synchronization...")
+
+        # 1. دریافت اطلاعات کامل تمام نمادها از متاتریدر
+        all_symbols = self.mt5.get_all_symbols()
+        if not all_symbols:
+            self.handle_status_message("No symbols found in MT5 to sync.", "warning")
+            return
+
+        # 2. دریافت اطلاعات حساب برای به دست آوردن login_id
+        account_info = self.mt5.get_account_info()
+        if not account_info:
+            self.handle_status_message("Could not get account info. Cannot sync.", "error")
+            return
+
+        login_id = account_info.get('login')
+
+        # 3. ساختاردهی داده‌ها در فرمت صحیح مورد انتظار سرور
+        payload = {
+            "type": "symbols_info_sync",
+            "login": login_id,
+            "symbols": all_symbols
+        }
+
+        # 4. ارسال بسته کامل به پراکسی سرور
+        try:
+            message_str = json.dumps(payload)
+            self.client.send_message(message_str)
+            self.handle_status_message(
+                f"Successfully sent {len(all_symbols)} symbols to the server for synchronization.")
+        except Exception as e:
+            self.handle_status_message(f"Failed to send symbols to server: {e}", "error")
 
     def start_symbol_fetching(self):
         self.symbol_combobox.set("Loading symbol list from database...")
         fetch_thread = threading.Thread(target=self.client.request_db_symbols, daemon=True)
         fetch_thread.start()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = AgentGUI(root)
+    root.mainloop()
