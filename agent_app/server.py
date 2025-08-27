@@ -12,7 +12,6 @@ import pytz
 from functools import partial
 from logger import setup_logger
 
-
 class AgentClient:
     def __init__(self, gui_callback_queue, mt5_manager):
         self.logger = setup_logger()
@@ -59,7 +58,8 @@ class AgentClient:
 
     async def _connect_and_listen(self):
         try:
-            async with websockets.connect(self.uri) as websocket:
+            # افزایش حداکثر سایز پیام برای جلوگیری از قطع شدن اتصال
+            async with websockets.connect(self.uri, max_size=2**24) as websocket:
                 self.websocket = websocket
                 self.log_and_gui("Proxy Status: Connected")
 
@@ -72,7 +72,6 @@ class AgentClient:
 
                 async for message in self.websocket:
                     self.handle_message(message)
-
         except Exception as e:
             self.log_and_gui(f"Connection error: {e}")
         finally:
@@ -82,32 +81,27 @@ class AgentClient:
         try:
             data = json.loads(message)
             msg_type = data.get("type")
-
             if msg_type == "db_symbols_list":
                 self.logger.info(f"Received {len(data.get('data', []))} symbols from DB.")
                 self.gui_callback_queue.put(data)
             else:
                 self.logger.info(f"Received message from server: {data}")
-
         except json.JSONDecodeError:
             self.logger.warning(f"Received non-JSON message: {message}")
         except Exception as e:
             self.logger.error(f"Error handling message: {e}")
 
-    def trigger_manual_sync(self):
-        if self.running and self.mt5.connect():
-            self.log_and_gui("Starting manual symbol sync...")
-            threading.Thread(target=self.run_symbol_sync, args=("Manual",), daemon=True).start()
-        else:
-            self.log_and_gui("Cannot sync: Not connected to proxy or MT5.")
-
     def run_symbol_sync(self, trigger_type):
+        """
+        منطق اصلاح شده برای همگام‌سازی زمان‌بندی شده که از ارسال دسته‌ای پشتیبانی می‌کند.
+        """
         self.log_and_gui(f"Symbol sync started (Trigger: {trigger_type})")
-
         def progress_callback(current, total):
-            self.gui_callback_queue.put({"type": "progress_update", "current": current, "total": total})
+            # برای همگام‌سازی زمان‌بندی شده، فقط در لاگ می‌نویسیم و UI را درگیر نمی‌کنیم
+            self.logger.info(f"Scheduled sync progress: {current}/{total}")
 
-        symbol_generator = self.mt5.sync_all_symbols_in_batches(progress_callback)
+        # FIX: اصلاح نام متد فراخوانی شده
+        symbol_generator = self.mt5.get_all_symbols_in_batches(progress_callback)
         for batch_data in symbol_generator:
             if self.running and batch_data:
                 self.send_message({
@@ -125,10 +119,7 @@ class AgentClient:
         if not self.websocket:
             return
         try:
-            if isinstance(message, dict):
-                message_to_send = json.dumps(message)
-            else:
-                message_to_send = message
+            message_to_send = json.dumps(message) if isinstance(message, dict) else message
             await self.websocket.send(message_to_send)
         except Exception as e:
             self.log_and_gui(f"Send error: {e}")
@@ -142,9 +133,6 @@ class AgentClient:
                 self.background_loop.call_soon_threadsafe(self.background_loop.stop)
             self.mt5.disconnect()
             self.log_and_gui("Client stopped")
-
-    def get_status(self):
-        return "Connected" if self.running and self.websocket else "Not connected"
 
     def request_db_symbols(self):
         if not self.login_number:
@@ -163,7 +151,6 @@ class AgentClient:
         if not self.login_number:
             self.log_and_gui("Cannot sync rates data: Login number is unknown.")
             return
-
         payload = {
             "type": "sync_rates_data",
             "login": self.login_number,
@@ -171,4 +158,4 @@ class AgentClient:
             "data": rates_data
         }
         self.send_message(payload)
-        self.log_and_gui(f"Sent {len(rates_data)} rates for {symbol_name} to the server.")
+        self.logger.info(f"Sent batch of {len(rates_data)} rates for {symbol_name} to the server.")
