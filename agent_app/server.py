@@ -1,5 +1,10 @@
-# C:\...\windows_agent_project\client\agent_app\server.py
-
+# ==================================================================
+# File: agent_app/server.py
+# Description: کد کامل و اصلاح شده.
+# تغییرات:
+# 1. _send_async حالا هوشمندتر عمل کرده و فقط در صورت نیاز داده را به JSON تبدیل می‌کند.
+# 2. کلید اشتباه 'data' در run_symbol_sync به 'symbols' تغییر کرده است.
+# ==================================================================
 import asyncio
 import websockets
 import threading
@@ -66,11 +71,9 @@ class AgentClient:
                     if account_info:
                         self.login_number = account_info['login']
                         await self._send_async({"type": "account_info", "data": account_info})
-                        # 🎯 به محض اتصال، به GUI اطلاع می‌دهیم که آماده است
                         self.gui_callback_queue.put({"type": "client_ready", "login": self.login_number})
 
-                # 🎯 حلقه فعال برای گوش دادن به پیام‌های سرور
-                async for message in websocket:
+                async for message in self.websocket:
                     self.handle_message(message)
 
         except Exception as e:
@@ -79,15 +82,13 @@ class AgentClient:
             self.stop()
 
     def handle_message(self, message):
-        """پیام‌های دریافتی از پراکسی را مدیریت می‌کند."""
         try:
             data = json.loads(message)
             msg_type = data.get("type")
 
             if msg_type == "db_symbols_list":
-                self.logger.info(f"Received {len(data.get('data', ))} symbols from DB.")
+                self.logger.info(f"Received {len(data.get('data', []))} symbols from DB.")
                 self.gui_callback_queue.put(data)
-            # 🎯 سایر انواع پیام را می‌توان در اینجا مدیریت کرد
             else:
                 self.logger.info(f"Received message from server: {data}")
 
@@ -97,7 +98,7 @@ class AgentClient:
             self.logger.error(f"Error handling message: {e}")
 
     def trigger_manual_sync(self):
-        if self.running and self.mt5.connected:
+        if self.running and self.mt5.connect():
             self.log_and_gui("Starting manual symbol sync...")
             threading.Thread(target=self.run_symbol_sync, args=("Manual",), daemon=True).start()
         else:
@@ -115,7 +116,7 @@ class AgentClient:
                 self.send_message({
                     "type": "symbols_info_sync",
                     "login": self.login_number,
-                    "data": batch_data
+                    "symbols": batch_data  # <-- FIX: Correct key is "symbols"
                 })
         self.log_and_gui("Symbol sync finished.")
 
@@ -127,7 +128,14 @@ class AgentClient:
         if not self.websocket:
             return
         try:
-            await self.websocket.send(json.dumps(message))
+            # FIX: Only dump to JSON if it's a dictionary.
+            # This prevents double encoding.
+            if isinstance(message, dict):
+                message_to_send = json.dumps(message)
+            else:
+                message_to_send = message # Assume it's already a JSON string
+
+            await self.websocket.send(message_to_send)
         except Exception as e:
             self.log_and_gui(f"Send error: {e}")
 
@@ -144,9 +152,7 @@ class AgentClient:
     def get_status(self):
         return "Connected" if self.running and self.websocket else "Not connected"
 
-    # 🎯 متد جدید برای درخواست لیست نمادها از پراکسی
     def request_db_symbols(self):
-        """درخواستی برای دریافت لیست نام نمادها از دیتابیس به پراکسی ارسال می‌کند."""
         if not self.login_number:
             self.log_and_gui("Cannot fetch symbols: Login number is unknown.")
             return
