@@ -180,10 +180,11 @@ class AgentGUI:
         if total > 0:
             percentage = (current / total) * 100
             self.progress_bar["value"] = percentage
-            self.progress_label.config(text=f"Processing: {current}/{total} symbols ({percentage:.2f}%)")
+            self.progress_label.config(
+                text=f"Syncing '{msg.get('symbol', 'N/A')}': {current}/{total} ({percentage:.2f}%)")
         if current >= total:
-            self.progress_label.config(text=f"Synchronization complete! {total} symbols processed.")
-            self.sync_button.config(state="normal")
+            self.progress_label.config(text=f"Synchronization complete for '{msg.get('symbol', 'N/A')}'!")
+            self.symbol_combobox.config(state="normal")  # Re-enable combobox after sync
 
     def handle_db_symbols(self, symbols):
         if symbols:
@@ -192,7 +193,7 @@ class AgentGUI:
             self.symbol_combobox.state(['!disabled'])
             self.symbol_combobox.set("Search for a symbol...")
         else:
-            self.symbol_combobox.set("No symbols found or error loading.")
+            self.symbol_combobox.set("No symbols found. Please use 'Sync Symbols'.")
 
     def handle_status_message(self, msg, level="info"):
         log_entry = f"[{level.upper()}] {msg}"
@@ -231,26 +232,32 @@ class AgentGUI:
         sync_thread.start()
 
     def on_sync_symbols_click(self):
-        self.handle_status_message("Starting symbol synchronization...")
+        self.handle_status_message("Starting symbol list synchronization...")
         all_symbols = self.mt5.get_all_symbols()
         if not all_symbols:
             self.handle_status_message("No symbols found in MT5 to sync.", "warning")
+            self.sync_button.config(state="normal")
             return
+
         account_info = self.mt5.get_account_info()
         if not account_info:
             self.handle_status_message("Could not get account info. Cannot sync.", "error")
+            self.sync_button.config(state="normal")
             return
-        login_id = account_info.get('login')
+
+        self.login_number = account_info.get('login')
         payload = {
             "type": "symbols_info_sync",
-            "login": login_id,
+            "login": self.login_number,
             "symbols": all_symbols
         }
         try:
             self.client.send_message(payload)
-            self.handle_status_message(f"Successfully sent {len(all_symbols)} symbols to the server.")
+            self.handle_status_message(f"Sent {len(all_symbols)} symbols to the server.")
         except Exception as e:
             self.handle_status_message(f"Failed to send symbols to server: {e}", "error")
+        finally:
+            self.sync_button.config(state="normal")
 
     def start_symbol_fetching(self):
         self.symbol_combobox.set("Loading symbol list from database...")
@@ -262,17 +269,26 @@ class AgentGUI:
             return
 
         self.handle_status_message(f"Symbol '{symbol_name}' selected. Fetching historical rates...", "info")
-        threading.Thread(target=self._fetch_and_sync_rates_data, args=(symbol_name,), daemon=True).start()
+        self.progress_bar["value"] = 0
+        self.symbol_combobox.config(state="disabled")
+        threading.Thread(target=self._fetch_and_sync_rates_in_batches, args=(symbol_name,), daemon=True).start()
 
-    def _fetch_and_sync_rates_data(self, symbol_name):
-        rates_data = self.mt5.get_rates_for_symbol(symbol_name)
-        if rates_data is None:
-            self.handle_status_message(f"Failed to fetch historical rates for {symbol_name}.", "error")
-            return
-        if not rates_data:
-            self.handle_status_message(f"No historical rates found for {symbol_name}.", "warning")
-            return
-        self.client.sync_rates_data(symbol_name, rates_data)
+    def _fetch_and_sync_rates_in_batches(self, symbol_name):
+        def progress_callback(current, total):
+            self.gui_queue.put({"type": "progress_update", "symbol": symbol_name, "current": current, "total": total})
+
+        rates_generator = self.mt5.get_rates_in_batches(symbol_name, progress_callback)
+
+        for batch_data in rates_generator:
+            if batch_data is None:
+                self.handle_status_message(f"Failed to fetch rates for {symbol_name}.", "error")
+                break
+            if not batch_data:
+                continue
+
+            self.client.sync_rates_data(symbol_name, batch_data)
+
+        self.handle_status_message(f"Finished syncing all batches for {symbol_name}.", "info")
 
 
 if __name__ == "__main__":
