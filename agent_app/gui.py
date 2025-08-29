@@ -1,6 +1,5 @@
-# = =================================================================
-# File: Mani_FAI_Client/agent_app/gui.py
-# Description: نسخه کامل و نهایی رابط کاربری با تمام قابلیت‌ها.
+# ==================================================================
+# File: Mani_FAI_Client/agent_app/gui.py (نسخه کامل و نهایی با کافکا)
 # ==================================================================
 import tkinter as tk
 from tkinter import ttk, font
@@ -104,19 +103,22 @@ class AgentGUI:
         main_frame = ttk.Frame(self.root, padding="20")
         main_frame.pack(fill="both", expand=True)
 
-        # --- بخش تنظیمات پراکسی ---
-        address_frame = ttk.LabelFrame(main_frame, text="Proxy Settings", padding=(15, 10))
+        # --- بخش تنظیمات سرور ---
+        address_frame = ttk.LabelFrame(main_frame, text="Server Settings", padding=(15, 10))
         address_frame.pack(fill="x", pady=(0, 15))
         address_frame.columnconfigure(1, weight=1)
-        ttk.Label(address_frame, text="Proxy IP:").grid(row=0, column=0, padx=(0, 10), pady=5, sticky="w")
-        self.ip_entry = ttk.Entry(address_frame, width=30)
-        self.ip_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        self.ip_entry.insert(0, "project-proxy.liara.run")
-        ttk.Label(address_frame, text="Proxy Port:").grid(row=1, column=0, padx=(0, 10), pady=5, sticky="w")
-        self.port_entry = ttk.Entry(address_frame)
-        self.port_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-        self.port_entry.insert(0, "443")
-        self.set_address_button = ttk.Button(address_frame, text="Set Proxy Address", command=self.set_proxy_address)
+
+        ttk.Label(address_frame, text="Kafka Servers:").grid(row=0, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.kafka_entry = ttk.Entry(address_frame, width=30)
+        self.kafka_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.kafka_entry.insert(0, "kafka-broker.liara.run:9092")
+
+        ttk.Label(address_frame, text="DB Handler URL:").grid(row=1, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.db_handler_entry = ttk.Entry(address_frame)
+        self.db_handler_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        self.db_handler_entry.insert(0, "https://project-db-handler.liara.run")
+
+        self.set_address_button = ttk.Button(address_frame, text="Set Addresses", command=self.set_server_addresses)
         self.set_address_button.grid(row=2, column=0, columnspan=2, pady=(10, 5))
 
         # --- بخش کنترل‌ها ---
@@ -138,11 +140,11 @@ class AgentGUI:
         search_frame.pack(fill="x", pady=(0, 15))
         self.symbol_combobox = SearchableCombobox(search_frame, width=40, on_select_callback=self.on_symbol_selected)
         self.symbol_combobox.pack(pady=5, fill="x", expand=True)
-        self.symbol_combobox.set("Connect to proxy to load symbols...")
+        self.symbol_combobox.set("Set addresses and connect to load symbols...")
         self.symbol_combobox.state(['disabled'])
 
         # --- بخش همگام‌سازی ---
-        sync_frame = ttk.LabelFrame(main_frame, text="Symbol Synchronization", padding=(15, 10))
+        sync_frame = ttk.LabelFrame(main_frame, text="Synchronization Status", padding=(15, 10))
         sync_frame.pack(fill="x", pady=(0, 15))
         self.progress_label = ttk.Label(sync_frame, text="Status: Idle", anchor="center")
         self.progress_label.pack(pady=5, fill="x", expand=True)
@@ -152,7 +154,8 @@ class AgentGUI:
         # --- بخش وضعیت کلی ---
         status_frame = ttk.LabelFrame(main_frame, text="System Status", padding=(15, 10))
         status_frame.pack(fill="x")
-        self.proxy_status_label = ttk.Label(status_frame, text="Proxy Status: Not connected")
+        self.kafka_status_label = ttk.Label(status_frame, text="Kafka Producer Status: Not connected")
+        self.proxy_status_label = self.kafka_status_label  # Rename for clarity
         self.proxy_status_label.pack(anchor="w", padx=5, pady=2)
         self.mt5_status_label = ttk.Label(status_frame, text="MT5 Status: Not connected")
         self.mt5_status_label.pack(anchor="w", padx=5, pady=2)
@@ -171,6 +174,8 @@ class AgentGUI:
                         self.start_symbol_fetching()
                     elif msg_type == "db_symbols_list":
                         self.handle_db_symbols(msg.get("data", []))
+                    elif msg_type == "log":
+                        self.handle_status_message(msg.get("message"), msg.get("level", "info"))
                 else:
                     self.handle_status_message(str(msg))
         finally:
@@ -199,17 +204,17 @@ class AgentGUI:
 
     def handle_status_message(self, msg, level="info"):
         log_entry = f"[{level.upper()}] {msg}"
-        if "Proxy Status:" in msg:
+        if "Kafka Producer Status:" in msg:
             self.proxy_status_label.config(text=msg)
         elif "MT5 Status:" in msg:
             self.mt5_status_label.config(text=msg)
         else:
             self.progress_label.config(text=log_entry)
 
-    def set_proxy_address(self):
-        self.client.set_server_address(self.ip_entry.get(), self.port_entry.get())
+    def set_server_addresses(self):
+        self.client.set_server_address(self.kafka_entry.get(), self.db_handler_entry.get())
         self.start_button.config(state="normal")
-        self.progress_label.config(text="Proxy address set. Ready to connect.")
+        self.progress_label.config(text="Addresses set. Ready to connect.")
 
     def start_client(self):
         self.client.start()
@@ -222,7 +227,7 @@ class AgentGUI:
         self.start_button.config(state="normal")
         self.stop_button.config(state="disabled")
         self.sync_button.config(state="disabled")
-        self.symbol_combobox.set("Connect to proxy to load symbols...")
+        self.symbol_combobox.set("Set addresses and connect to load symbols...")
         self.symbol_combobox.state(['disabled'])
         self.symbol_combobox.set_master_list([])
 
@@ -230,44 +235,23 @@ class AgentGUI:
         self.progress_label.config(text="Manual sync requested for symbol list...")
         self.progress_bar["value"] = 0
         self.sync_button.config(state="disabled")
-        sync_thread = threading.Thread(target=self.on_sync_symbols_click, daemon=True)
-        sync_thread.start()
+        threading.Thread(target=self.on_sync_symbols_click, daemon=True).start()
 
     def on_sync_symbols_click(self):
-        """
-        منطق جدید برای ارسال دسته‌ای لیست کلی نمادها.
-        """
         self.handle_status_message("Starting symbol list synchronization...")
-        account_info = self.mt5.get_account_info()
-        if not account_info:
-            self.handle_status_message("Could not get account info. Cannot sync.", "error")
-            self.sync_button.config(state="normal")
-            return
-        self.login_number = account_info.get('login')
 
         def progress_callback(current, total):
             self.gui_queue.put({"type": "progress_update", "current": current, "total": total})
 
         symbol_generator = self.mt5.get_all_symbols_in_batches(progress_callback)
-        for batch_data in symbol_generator:
-            if batch_data is None:
-                self.handle_status_message("Failed to fetch symbol list from MT5.", "error")
-                break
-            if not batch_data:
-                continue
-
-            payload = {"type": "symbols_info_sync", "login": self.login_number, "symbols": batch_data}
-            self.client.send_message(payload)
-            time.sleep(0.1)  # Pause briefly to avoid overwhelming the server
+        self.client.sync_symbols_in_batches(symbol_generator)
 
         self.handle_status_message("Finished syncing symbol list. You can now search.", "info")
-        # After sync, re-fetch the list from DB to populate combobox
         self.start_symbol_fetching()
 
     def start_symbol_fetching(self):
         self.symbol_combobox.set("Loading symbol list from database...")
-        fetch_thread = threading.Thread(target=self.client.request_db_symbols, daemon=True)
-        fetch_thread.start()
+        threading.Thread(target=self.client.request_db_symbols, daemon=True).start()
 
     def on_symbol_selected(self, symbol_name):
         if not symbol_name or "Search for" in symbol_name or "Connect to" in symbol_name:
@@ -283,15 +267,7 @@ class AgentGUI:
             self.gui_queue.put({"type": "progress_update", "symbol": symbol_name, "current": current, "total": total})
 
         rates_generator = self.mt5.get_rates_in_batches(symbol_name, progress_callback)
-
-        for batch_data in rates_generator:
-            if batch_data is None:
-                self.handle_status_message(f"Failed to fetch rates for {symbol_name}.", "error")
-                break
-            if not batch_data:
-                continue
-
-            self.client.sync_rates_data(symbol_name, batch_data)
+        self.client.sync_rates_data_in_batches(symbol_name, rates_generator)
 
         self.handle_status_message(f"Finished syncing all batches for {symbol_name}.", "info")
 
