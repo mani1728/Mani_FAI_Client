@@ -1,15 +1,13 @@
 #==================================================================
-#File: Mani_FAI_Client/requirements.txt
-#Description: نسخه کامل و نهایی نیازمندی‌های پروژه کلاینت.
+#File: Mani_FAI_Client/requirements.txt (نسخه نهایی با کافکا)
 #==================================================================
 pip==25.2
 pyinstaller==6.15.0
 MetaTrader5==5.0.5200
-sv_ttk==2.6.1
+sv-ttk==2.6.1
 pytz==2025.2
 schedule==1.2.2
-websockets==15.0.1
-asyncio==4.0.0
-websocket_client==1.8.0
 pandas
 numpy
+aiokafka
+aiohttp
